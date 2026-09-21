@@ -49,7 +49,7 @@ class DriftPolicy:
     persistence_windows: int = 1
     psi_epsilon: float = 1e-4
     excluded_prefixes: Tuple[str, ...] = ("hour_", "dow_")
-    excluded_features: Tuple[str, ...] = ()
+    excluded_features: Tuple[str, ...] = ("roll_mean_24", "roll_std_24")
 
     def __post_init__(self) -> None:
         if self.min_samples < 2:

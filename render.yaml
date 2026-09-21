@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: mainframe-cpu-forecaster
+    runtime: python
+    plan: free
+    region: singapore
+    autoDeployTrigger: commit
+    buildFilter:
+      paths:
+        - src/**
+        - artifacts/models/**
+        - requirements.txt
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: uvicorn src.main:app --host 0.0.0.0 --port $PORT --workers 1
+    healthCheckPath: /readyz
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.8"
+      - key: MODEL_ARTIFACT_DIR
+        value: artifacts/models
+      - key: FORECAST_FREQ
+        value: h
+      - key: MAX_SERIES_PER_REQUEST
+        value: "25"
+      - key: MAX_POINTS_PER_SERIES
+        value: "2000"
+      - key: MAX_GRID_STEPS
+        value: "10000"
+      - key: MAX_FUTURE_SKEW_SECONDS
+        value: "300"
+      - key: LOG_LEVEL
+        value: INFO
