@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, AsyncIterator, Dict, List, Mapping, Optional, Sequence, Tuple
+from fastapi.responses import RedirectResponse
 
 import joblib
 import numpy as np
@@ -643,6 +644,10 @@ async def unhandled_error_handler(request: Request, exc: Exception) -> JSONRespo
     logger.exception("request_id=%s unhandled error", _request_id(request))
     return _error_response(request, 500, "INTERNAL_ERROR", "Unexpected server error.")
 
+@app.get("/", include_in_schema=False)
+async def root_redirect():
+    """Automatically reroutes bare root internet traffic straight to the interactive Swagger panel."""
+    return RedirectResponse(url="/docs")
 
 @app.get("/healthz", include_in_schema=False)
 async def healthz() -> Dict[str, str]:
