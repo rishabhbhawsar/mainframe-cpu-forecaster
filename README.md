@@ -125,36 +125,36 @@ This structural probe is layered under 22 automated checks in the training/drift
 | Pooled out-of-fold MAE (learnable channels) | **1.564%** CPU utilization |
 | Pooled out-of-fold RMSE (learnable channels) | **1.968%** CPU utilization |
 | Exportable series | 11 / 12 (1 adversarial channel correctly gate-rejected) |
-| Injected regime-shift drift capture | **11 / 11** monitored features flagged drifting |
-| Max PSI on injected shift | **6.455 – 7.778** (threshold: 0.2) |
-| Min KS p-value on injected shift | **~1e-63 to 1e-131** (threshold: 0.05) |
-| Aggregate verdict on injected shift | `RETRAIN_TRIGGERED` |
+| Injected regime-shift drift capture (`BOX01/SYSA/BATCH_LOW`) | **11 / 11** monitored features flagged drifting |
+| Max PSI on injected shift (`BOX01/SYSA/BATCH_LOW`) | **6.455** (threshold: 0.2) |
+| Min KS p-value on injected shift (`BOX01/SYSA/BATCH_LOW`) | **1.06e-63** (threshold: 0.05) |
+| Aggregate verdict on injected regime shift | `RETRAIN_TRIGGERED` |
 | Aggregate verdict on stable, unshifted series | `NOMINAL`, 0 monitored features flagged |
 
-All figures are measured against synthetic telemetry with a controlled diurnal signal-to-noise ratio and should be read as a validation of pipeline correctness, not as a claim about real-world mainframe forecast accuracy.
+All figures are measured against synthetic telemetry with a controlled diurnal signal-to-noise ratio and should be read as a validation of pipeline correctness, not as a claim about real-world mainframe forecast accuracy. Figures are drawn from the post-calibration gateway smoke test (`scripts/test_gateway.py`), which exercises one of the two injected-shift series (`BOX01/SYSA/BATCH_LOW`); the second (`BOX02/SYSA/CICS_PRD`) has not been re-measured since the `roll_mean_24`/`roll_std_24` exclusion and is omitted here rather than reported from stale pre-calibration numbers.
 
 ---
 
 ## 9. Known Limitations
 
-- **Autoregressive history floor.** A series needs at least 24 regularized hourly grid steps to clear feature warm-up, and at least 54 steps for the live window to clear the drift monitor's minimum-sample floor (30 rows after warm-up). Requests below either threshold return a structured HTTP 422 `INSUFFICIENT_DATA` response rather than a silently degraded forecast.
-- **Hardware / scaling constraints.** Request limits are currently capped at 25 series and 2,000 points per series per call, sized to fit the free-tier container's 512 MB memory ceiling. A single Uvicorn worker is run intentionally: each process loads the full artifact set into memory, and a second worker on this tier risks OOM rather than adding throughput.
+- **Autoregressive History Floor.** The system requires a strict minimum lookback history anchor of 24 regularized grid steps to warm up features and 54 steps to clear the drift sample threshold floor, throwing structured HTTP 422 `INSUFFICIENT_DATA` error codes otherwise.
+- **Hardware / Scaling Constraints.** Synthetic data bounds are currently scaled to 25 unique infrastructure series keys and 2000 points per request to fit within free-tier container memory bounds (512MB RAM limits).
 - **Synthetic data only.** All models are trained on procedurally generated telemetry with an engineered diurnal cycle. No real mainframe SMF/RMF data has been used or validated against.
-- **No authentication layer yet.** The forecast endpoint is currently open; see Roadmap.
+- **No authentication layer yet.** The forecast endpoint is currently open to any caller with the URL; see Roadmap.
 
 ---
 
 ## 10. Roadmap & Future Improvements
 
-- Migration from Python pickle-based artifacts (`joblib`) to native, framework-portable XGBoost JSON serialization.
-- Token-based API key validation on ingress endpoints to prevent unauthenticated cluster consumption.
-- A dedicated React/Next.js monitoring dashboard with windowed list virtualization and debounced input anchors, applying Akshay Saini's Frontend System Design (FSD) principles to the drift and forecast views.
+- Migration from standard Python pickles (`joblib`) to native, lightweight XGBoost JSON serialization models.
+- Implementation of secure, token-based API key validation guardrails on ingress endpoints to prevent open cluster consumption.
+- Integration of windowed list virtualization and debounced input anchors via a dedicated React/Next.js monitoring UI dashboard utilizing Advanced Frontend System Design paradigms.
 
 ---
 
 ## Author
 
-Rishabh Bhawsar
+Rishabh Bhawsar — AI Systems & MLOps Engineer
 GitHub: [github.com/rishabhbhawsar](https://github.com/rishabhbhawsar)
 LinkedIn: [linkedin.com/in/rishabh-bhawsar-409098262](https://linkedin.com/in/rishabh-bhawsar-409098262)
 
