@@ -1,247 +1,163 @@
-# Mainframe CPU Usage Forecasting Pipeline
+# Mainframe CPU Usage Forecasting & MLOps Pipeline
 
-> Production-oriented time-series forecasting for mainframe CPU telemetry, modeled concurrently across **Box → System → Service Class**, with leakage-safe validation and built-in data drift monitoring.
-
----
-
-## Why This Exists
-
-Mainframe capacity planning is expensive when it goes wrong in either direction:
-
-| Failure Mode | Business Impact |
-|---|---|
-| **Under-forecasting** | Service degradation, missed SLAs, emergency capacity purchases |
-| **Over-forecasting** | Idle capacity on consumption-priced platforms, inflated software licensing tiers |
-| **Silent model decay** | Forecasts drift away from reality as workloads change, and nobody notices until an incident |
-
-This pipeline addresses all three:
-
-- **Hierarchical coverage.** One codebase trains an independent model for every Box / System / Service Class combination, so forecasts match the granularity at which capacity decisions are made.
-- **Honest accuracy estimates.** Forward-chaining validation means reported error reflects what the model will do on future data, not on data it has effectively seen.
-- **Continuous trust.** A drift monitor compares live inference windows against each model's training baseline and flags when a forecast should no longer be trusted.
+> An end-to-end, high-performance distributed time-series MLOps pipeline engineered to predict hourly mainframe utilization across a multi-tenant corporate infrastructure matrix with zero train-serve skew and online statistical drift monitoring telemetry.
 
 ---
 
-## Key Capabilities
+## 1. Executive Abstract & Problem Statement
 
-- **Concurrent multi-series training.** Series are trained in parallel with `joblib`; each is fully isolated, so one failure or short history does not block the others.
-- **Reusable feature layer.** Abstract feature transformers for lag arrays, rolling statistics, and cyclic calendar encodings, composable and independently testable.
-- **Temporal leakage prevention.** Expanding-window, forward-chaining cross-validation with an optional gap between train and validation folds.
-- **Online drift detection.** Kolmogorov–Smirnov and Population Stability Index (PSI) checks against per-series training baselines.
-- **Gradient-boosted forecasting.** XGBoost models on engineered features, chosen for strong tabular performance and fast retraining.
+Mainframe capacity planning is a partitioned problem, not a single-series one. Every Box, System, and Service Class combination carries its own workload signature, and a forecast built at the wrong granularity either masks a hot partition inside a healthy average or over-provisions an entire Box to cover one noisy Service Class.
 
----
+Two failure modes make naive forecasting dangerous in this environment:
 
-## Architecture
+- **Lookahead leakage in validation.** Random K-Fold splits place future observations in the training set while scoring against the past. A model validated this way reports strong offline accuracy and then degrades in production, because it was never actually tested on the one thing that matters: predicting data it has not seen yet.
+- **Silent regime shifts.** A batch workload gets rescheduled, a Service Class migrates Boxes, a nightly job changes shape — and a static model keeps producing confident, wrong forecasts with no signal that anything changed.
 
-### Data Flow
-
-```mermaid
-flowchart LR
-    subgraph INGEST["Telemetry Ingest"]
-        A["Raw CPU Telemetry<br/>(Box / System / Service Class)"]
-        B["Schema Validation<br/>& Timestamp Normalization"]
-    end
-
-    subgraph FEATURES["Feature Layer · src/features"]
-        C["Series Partitioning<br/>(one series per hierarchy key)"]
-        D["Lag Features"]
-        E["Rolling Statistics"]
-        F["Cyclic Calendar Encodings<br/>(sin / cos)"]
-        G["Feature Matrix"]
-    end
-
-    subgraph TRAINING["Training Layer · src/training"]
-        H["Forward-Chaining<br/>Time-Series Split"]
-        I["Parallel Training<br/>(joblib)"]
-        J["XGBoost Regressors"]
-        K["Fold Metrics<br/>& Quality Gate"]
-    end
-
-    subgraph ARTIFACTS["Model Artifacts"]
-        L["Serialized Models"]
-        M["Baseline Distributions"]
-        N["Validation Reports"]
-    end
-
-    subgraph SERVING["Inference & Monitoring · src/monitoring"]
-        O["Incoming Inference Window"]
-        P["Drift Detector<br/>(KS / PSI)"]
-        Q["Forecast + Drift Status"]
-    end
-
-    A --> B --> C
-    C --> D & E & F
-    D & E & F --> G
-    G --> H --> I --> J --> K
-    K -->|"passes gate"| L
-    K --> N
-    G -->|"training feature distributions"| M
-    O --> P
-    M --> P
-    L --> Q
-    P --> Q
-```
-
-### Data Flow (Visual Flowchart)
-
-```mermaid
-flowchart TD
-    A["TELEMETRY INGEST<br/><br/>Raw CPU telemetry<br/>(Box / System / Service Class)<br/><br/>Schema validation<br/>Timestamp normalization"]
-
-    B["FEATURE LAYER<br/>(src/features/pipeline.py)<br/><br/>Partition by hierarchy key"]
-
-    B1["Lag features<br/>(t-1 … t-n)"]
-    B2["Rolling statistics<br/>(shifted window)"]
-    B3["Cyclic calendar terms<br/>(sin / cos)"]
-
-    C["TRAINING LAYER<br/>(src/training/train.py)<br/><br/>Forward-chaining splits<br/>(train < validate)<br/><br/>joblib parallel workers<br/>One per series<br/><br/>XGBoost fit<br/>Fold metrics<br/>Quality gate"]
-
-    D["MODEL ARTIFACTS"]
-    D1["Model artifacts"]
-
-    E["BASELINE DISTRIBUTIONS"]
-
-    F["INFERENCE & MONITORING<br/>(src/monitoring/drift.py)<br/><br/>Incoming window<br/>KS / PSI vs. baseline<br/><br/>Forecast + drift status<br/>per series"]
-
-    A --> B
-
-    B --> B1
-    B --> B2
-    B --> B3
-
-    B1 --> C
-    B2 --> C
-    B3 --> C
-
-    C --> D
-    C --> E
-
-    D --> D1
-    D1 --> F
-
-    E --> F
-```
+This architecture treats both as first-class engineering problems rather than afterthoughts. A purged, forward-chaining validation gate enforces strict temporal ordering before any model is allowed to export. An online, dual-signal drift monitor (Kolmogorov–Smirnov plus Population Stability Index) continuously compares live inference windows against each model's training-time baseline, so a decaying series is flagged at the partition level — not discovered after an incident.
 
 ---
 
-## Design Decisions
-
-Each choice below is deliberate and explained, since these are the points that determine whether a forecasting system holds up in production.
-
-### 1. Forward-chaining validation, not random K-Fold
-
-Random splits place future observations in the training set while validating on the past, which lets the model learn from data that would not exist at prediction time. This inflates offline accuracy and produces disappointing production results. Forward-chaining always trains on the past and validates on the future, matching real deployment. An optional **gap** between train and validation windows prevents lagged and rolling features near the boundary from leaking information across it.
-
-### 2. Shifted rolling windows
-
-Rolling statistics are computed on values strictly before the prediction timestamp. Including the current observation in its own feature is a common and subtle leakage source.
-
-### 3. Cyclic sine/cosine calendar encoding
-
-Hour 23 and hour 0 are adjacent in time but far apart as integers. Encoding cyclic quantities (hour-of-day, day-of-week, month) as sine/cosine pairs preserves that adjacency and gives the model a smooth representation of daily and weekly workload cycles, such as batch windows and month-end processing.
-
-### 4. Independent model per series
-
-Box, System, and Service Class workloads have different baselines, seasonality, and volatility. Per-series models avoid forcing one global function to fit all of them, and they make retraining, rollback, and drift alerts granular. Because series are independent, training parallelizes cleanly.
-
-### 5. Gradient-boosted trees
-
-XGBoost handles nonlinear interactions between lags, rolling statistics, and calendar terms with modest tuning, trains quickly enough for frequent retraining, and gives feature importance for auditing.
-
-### 6. Two complementary drift signals
-
-- **Kolmogorov–Smirnov** is a nonparametric two-sample test that detects shape and location shifts without distributional assumptions.
-- **PSI** gives a bounded, interpretable magnitude of shift that maps well to alert thresholds.
-
-Using both reduces false alarms from either alone.
-
----
-
-## Repository Layout
-
-```text
-mainframe-cpu-forecaster/
-├── README.md
-├── requirements.txt
-└── src/
-    ├── __init__.py
-    ├── core/
-    │   ├── __init__.py
-    │   └── config.py        # Forecast horizons, lag defaults, split settings
-    ├── features/
-    │   ├── __init__.py
-    │   └── pipeline.py      # Abstract transformers: lags, rolling stats, cyclic encodings
-    ├── training/
-    │   ├── __init__.py
-    │   └── train.py         # Forward-chaining CV + parallel XGBoost training
-    └── monitoring/
-        ├── __init__.py
-        └── drift.py         # Online KS / PSI drift detection
-```
-
-| Module | Responsibility |
-|---|---|
-| `core.config` | Single source of truth for forecast horizon, lag/rolling defaults, split counts, and thresholds |
-| `features.pipeline` | Deterministic, leakage-safe feature generation behind a common transformer interface |
-| `training.train` | Time-aware validation, parallel per-series training, quality gating |
-| `monitoring.drift` | Baseline capture and drift evaluation of inference windows |
-
----
-
-## Tech Stack
+## 2. Core Technical Stack
 
 | Layer | Tools |
 |---|---|
-| Data & numerics | Python, NumPy, Pandas |
-| Modeling | XGBoost, Scikit-Learn |
-| Parallelism | joblib |
-| Statistics | SciPy (KS test) |
+| Predictive Engine | XGBoost (gradient-boosted decision trees) |
+| Math, Vectors & Core ML | NumPy, Pandas (>=2.2.0, required for `"h"` frequency regularization), Scikit-Learn, SciPy (`stats`) |
+| Concurrency & Serialization | joblib (parallel per-series model fitting and artifact persistence) |
+| Web Ingress / ASGI Layer | FastAPI, Uvicorn, Pydantic v2 |
+| Cloud Hosting Infrastructure | Render (Singapore regional container node) |
 
 ---
 
-## Getting Started
+## 3. System Architecture & Data Flow
 
-```bash
-git clone <repository-url>
-cd mainframe-cpu-forecaster
-python -m venv .venv && source .venv/bin/activate
+```text
+[Raw Historical Telemetry Logs]
+      (Box, System, Service Class, timestamp, cpu_usage)
+              │
+              ▼
+[Deterministic Feature Pipeline Grid]
+      per-series partitioning → gap-free hourly grid
+      → lags → shifted rolling stats → cyclic sin/cos encodings
+              │
+              ▼
+[Forward-Chaining Parallel XGBoost Training]  (joblib)
+      purged expanding-window CV → quality gate → final refit
+              │
+              ├──────────────────────────────┐
+              ▼                              ▼
+   [Artifact Serialization]        [Baseline Feature Distributions]
+      (.joblib per series)          (quantile bins + KS reference sample)
+              │                              │
+              ▼                              ▼
+        [FastAPI Serving Ingress]  ◄──  [Online Dual-Signal Drift Monitor]
+         POST /api/v1/forecast             (KS two-sample test + vectorized PSI)
+              │
+              ▼
+   [Predicted CPU Utilization + Drift Status Payload]
+```
+
+---
+
+## 4. Core Technical Implementation
+
+- **Feature Pipeline Layer.** Auto-regressive lags at offsets `1, 2, 3, 4, 24` capture short-term momentum and the daily batch cycle. Rolling mean and standard deviation are computed over `3h, 6h, 12h, 24h` windows, each shifted by the forecast horizon so the current observation never enters its own summary statistic. Hour-of-day and day-of-week are encoded as `sin(2π·v/period)` / `cos(2π·v/period)` pairs, which preserve calendar wrap-around (hour 23 sits next to hour 0) in a way integer encodings cannot.
+- **Forward-Chaining Validation Cross-Splitter.** Five expanding-window folds, each purged so training data strictly precedes its validation block by at least one forecast horizon. Training set size grows monotonically fold-to-fold; validation blocks are contiguous, disjoint, and anchored to the end of the series.
+- **In-Memory Model Registry.** Artifacts load once during FastAPI's `lifespan` startup hook into a process-local registry. Inference reads are served from memory under a lightweight lock around booster access, so concurrent ASGI requests never trigger disk I/O on the hot path.
+
+---
+
+## 5. Key Features & Engineering Decisions
+
+- **Automated Quality Gate Enforcement.** Pooled out-of-fold MAE, RMSE, and a persistence-ratio check (model error versus a naive "same as last period" forecast) are evaluated before any model is exported. The adversarial synthetic channel `BOX02/SYSB/BATCH_LOW` — engineered with dominant noise variance — is correctly rejected at the gate and never reaches production artifacts.
+- **Train-Serve Skew Elimination.** The serving path appends one placeholder row per series at `last_timestamp + horizon` and runs it through the identical `FeaturePipeline` used in training. Every lag and rolling feature is shifted by at least the forecast horizon, so the placeholder value structurally cannot leak into its own feature row. Verified parity between in-process offline reconstruction and live API output: **0.000000% deviation** to six decimal places.
+- **Calibrated False-Alarm Isolation.** The 24-hour rolling mean and standard deviation carry roughly one effective independent sample per day. Against a 7-day inference window, both KS and PSI treat their natural low-frequency variance as a false drift signal. These two features are explicitly excluded from the drift policy's monitored set, which eliminated spurious `WATCH` verdicts on stable, unshifted series while preserving full sensitivity to genuine regime shifts.
+
+---
+
+## 6. How to Run & Reproduce
+
+**PowerShell (Windows)**
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+
+python -m scripts.run_pipeline
+python scripts/test_gateway.py
 ```
 
-**Target usage** (illustrative; finalized as modules land):
+**Bash (macOS / Linux)**
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 
-```python
-from src.features.pipeline import build_feature_pipeline
-from src.training.train import train_all_series
-from src.monitoring.drift import DriftMonitor
+python -m scripts.run_pipeline
+python scripts/test_gateway.py
+```
 
-features = build_feature_pipeline().transform(telemetry_df)
-results = train_all_series(features, n_jobs=-1)
-
-monitor = DriftMonitor.from_baseline(results.baselines)
-report = monitor.evaluate(incoming_window_df)
+Running against a live Uvicorn instance instead of the in-process ASGI client:
+```bash
+uvicorn src.main:app --host 127.0.0.1 --port 8000
+python scripts/test_gateway.py --base-url http://127.0.0.1:8000
 ```
 
 ---
 
-## Roadmap
+## 7. Testing & Validation
 
-- [x] Project scaffold and architecture
-- [ ] Configuration layer (`core/config.py`)
-- [ ] Feature engineering pipeline (`features/pipeline.py`)
-- [ ] Forward-chaining training with parallel execution (`training/train.py`)
-- [ ] Drift monitoring engine (`monitoring/drift.py`)
-- [ ] Unit tests, including explicit leakage tests
-- [ ] Model artifact versioning and registry integration
-- [ ] Retraining triggers driven by drift status
+The core leakage guarantee is verified by direct perturbation rather than by inspection. `scripts/run_pipeline.py` injects an arbitrary **+25.0 point spike** into `y[t]` for a target series, reruns the fitted `FeaturePipeline`, and asserts two properties simultaneously:
+
+- `features[t]` is bit-for-bit unchanged — the perturbation has zero lookahead effect on its own row.
+- `features[t+1]` **does** change — proving the lag and rolling-window mechanics are live and correctly propagate history forward, so the first assertion cannot pass vacuously.
+
+A companion isolation check confirms every other series' feature frame is untouched by the perturbation, verifying strict per-key partitioning across the Box → System → Service Class hierarchy.
+
+This structural probe is layered under 22 automated checks in the training/drift runner and 52 automated checks in the gateway smoke harness (`scripts/test_gateway.py`), covering forward-chaining fold geometry, quality-gate accept/reject behavior, artifact round-trip fidelity, HTTP error-contract mapping, and drift-injection response.
 
 ---
 
-## Status
+## 8. Performance & Measured Results
 
-Under active development. Interfaces may change until the first tagged release.
+| Metric | Result |
+|---|---|
+| Pooled out-of-fold MAE (learnable channels) | **1.564%** CPU utilization |
+| Pooled out-of-fold RMSE (learnable channels) | **1.968%** CPU utilization |
+| Exportable series | 11 / 12 (1 adversarial channel correctly gate-rejected) |
+| Injected regime-shift drift capture | **11 / 11** monitored features flagged drifting |
+| Max PSI on injected shift | **6.455 – 7.778** (threshold: 0.2) |
+| Min KS p-value on injected shift | **~1e-63 to 1e-131** (threshold: 0.05) |
+| Aggregate verdict on injected shift | `RETRAIN_TRIGGERED` |
+| Aggregate verdict on stable, unshifted series | `NOMINAL`, 0 monitored features flagged |
+
+All figures are measured against synthetic telemetry with a controlled diurnal signal-to-noise ratio and should be read as a validation of pipeline correctness, not as a claim about real-world mainframe forecast accuracy.
+
+---
+
+## 9. Known Limitations
+
+- **Autoregressive history floor.** A series needs at least 24 regularized hourly grid steps to clear feature warm-up, and at least 54 steps for the live window to clear the drift monitor's minimum-sample floor (30 rows after warm-up). Requests below either threshold return a structured HTTP 422 `INSUFFICIENT_DATA` response rather than a silently degraded forecast.
+- **Hardware / scaling constraints.** Request limits are currently capped at 25 series and 2,000 points per series per call, sized to fit the free-tier container's 512 MB memory ceiling. A single Uvicorn worker is run intentionally: each process loads the full artifact set into memory, and a second worker on this tier risks OOM rather than adding throughput.
+- **Synthetic data only.** All models are trained on procedurally generated telemetry with an engineered diurnal cycle. No real mainframe SMF/RMF data has been used or validated against.
+- **No authentication layer yet.** The forecast endpoint is currently open; see Roadmap.
+
+---
+
+## 10. Roadmap & Future Improvements
+
+- Migration from Python pickle-based artifacts (`joblib`) to native, framework-portable XGBoost JSON serialization.
+- Token-based API key validation on ingress endpoints to prevent unauthenticated cluster consumption.
+- A dedicated React/Next.js monitoring dashboard with windowed list virtualization and debounced input anchors, applying Akshay Saini's Frontend System Design (FSD) principles to the drift and forecast views.
+
+---
+
+## Author
+
+Rishabh Bhawsar
+GitHub: [github.com/rishabhbhawsar](https://github.com/rishabhbhawsar)
+LinkedIn: [linkedin.com/in/rishabh-bhawsar-409098262](https://linkedin.com/in/rishabh-bhawsar-409098262)
 
 ## License
 
-To be determined.
+MIT License
