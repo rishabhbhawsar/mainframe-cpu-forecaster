@@ -19,6 +19,7 @@ import joblib
 import numpy as np
 import pandas as pd
 from fastapi import Depends, FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pandas.tseries.frequencies import to_offset
@@ -616,6 +617,20 @@ async def request_context(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Request-ID"] = rid
     return response
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "X-Request-ID"],
+    expose_headers=["X-Request-ID"],
+)
+
+
+@app.exception_handler(GatewayError)
+async def gateway_error_handler(request: Request, exc: GatewayError) -> JSONResponse:
 
 
 @app.exception_handler(GatewayError)

@@ -158,13 +158,13 @@ export const ForecastChart: FC<ForecastChartProps> = ({ data, forecastOriginTime
             type="monotone"
             dataKey="predicted"
             stroke={COLORS.predicted}
-            strokeWidth={1.5}
+            strokeWidth={2}
             strokeDasharray="5 3"
-            dot={false}
-            activeDot={{ r: 3, fill: COLORS.predicted, stroke: "#09090b" }}
+            dot={{ r: 4, fill: COLORS.predicted, stroke: "#09090b" }}
+            activeDot={{ r: 6 }}
             isAnimationActive={false}
             connectNulls={false}
-          />
+            />
         </ComposedChart>
       </ResponsiveContainer>
     </div>
