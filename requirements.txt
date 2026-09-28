@@ -1,9 +1,0 @@
-fastapi
-uvicorn[standard]
-pydantic-settings
-joblib
-numpy
-pandas>=2.2.0
-scipy
-scikit-learn
-xgboost-cpu
