@@ -631,10 +631,6 @@ app.add_middleware(
 
 @app.exception_handler(GatewayError)
 async def gateway_error_handler(request: Request, exc: GatewayError) -> JSONResponse:
-
-
-@app.exception_handler(GatewayError)
-async def gateway_error_handler(request: Request, exc: GatewayError) -> JSONResponse:
     log = logger.error if exc.status_code >= 500 else logger.warning
     log("request_id=%s %s: %s", _request_id(request), exc.code, exc.message)
     return _error_response(request, exc.status_code, exc.code, exc.message, exc.details)
